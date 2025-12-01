@@ -1,0 +1,5 @@
+{
+  "name": "Limit analysis of planar 4-bar linkages",
+  "description": "Interactive analysis tool for planar four-bar linkages. Visualize motion, adjust link lengths, analyze limits, and monitor transmission angles in real-time.",
+  "requestFramePermissions": []
+}
