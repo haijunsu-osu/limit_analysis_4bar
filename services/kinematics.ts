@@ -69,27 +69,25 @@ export const solveFourBar = (config: MechanismConfig, theta2: number): Mechanism
   const x2 = A.x + a_dist * (O4.x - A.x) / dist_AO4;
   const y2 = A.y + a_dist * (O4.y - A.y) / dist_AO4;
 
+  // B1 is the "Right" / "Clockwise" solution relative to vector A->O4 (Crossed)
   const B1: Point = {
     x: x2 + h * (O4.y - A.y) / dist_AO4,
     y: y2 - h * (O4.x - A.x) / dist_AO4
   };
 
+  // B2 is the "Left" / "Counter-Clockwise" solution relative to vector A->O4 (Open)
   const B2: Point = {
     x: x2 - h * (O4.y - A.y) / dist_AO4,
     y: y2 + h * (O4.x - A.x) / dist_AO4
   };
 
-  const B = assemblyMode === 1 ? B1 : B2;
+  // Assembly Mode 1 = Open (B2), -1 = Crossed (B1)
+  const B = assemblyMode === 1 ? B2 : B1;
 
   const theta3 = Math.atan2(B.y - A.y, B.x - A.x);
   const theta4 = Math.atan2(B.y - O4.y, B.x - O4.x);
 
   // Transmission Angle (mu): Angle between coupler (r3) and output (r4)
-  // Calculated using Law of Cosines on triangle ABO4 with side AO4 as the opposite side to Angle B?
-  // No, Angle at B in triangle ABO4 is the angle between AB and BO4.
-  // The transmission angle mu is defined as the acute angle between coupler and rocker lines.
-  // Standard formula using lengths:
-  // AO4^2 = r3^2 + r4^2 - 2*r3*r4*cos(mu) -> if considering the interior angle.
   const val = (r3 * r3 + r4 * r4 - dist_AO4 * dist_AO4) / (2 * r3 * r4);
   const clampedVal = Math.max(-1, Math.min(1, val));
   const transmissionAngle = Math.acos(clampedVal);
@@ -123,8 +121,9 @@ export const solveInverseTheta2 = (config: MechanismConfig, targetTheta4: number
   const x2 = 0 + a_dist * (Bx - 0) / dist_O2B;
   const y2 = 0 + a_dist * (By - 0) / dist_O2B;
 
-  // Choose intersection A1 or A2.
-  // For dragging, we usually return one valid solution.
+  // We need to pick A1 or A2.
+  // Generally, A1 corresponds to "up" intersection relative to O2-B vector.
+  // This is context dependent, but for dragging B, we can just return one valid A.
   const A1 = {
     x: x2 + h * (By - 0) / dist_O2B,
     y: y2 - h * (Bx - 0) / dist_O2B
@@ -161,7 +160,7 @@ export const getGrashofType = (config: MechanismConfig): GrashofType => {
  * Calculate the motion limits and transmission limits
  */
 export const calculateLimits = (config: MechanismConfig): LimitAnalysis => {
-    const { r1, r2, r3, r4 } = config;
+    const { r1, r2, r3, r4, assemblyMode } = config;
     
     // --- Rocker Limits ---
     // Occur when Crank (r2) and Coupler (r3) are collinear.
@@ -184,10 +183,19 @@ export const calculateLimits = (config: MechanismConfig): LimitAnalysis => {
          if (Math.abs(cosGamma) > 1.0) return null; 
          
          const gamma = Math.acos(cosGamma);
-         // Standard config places B above ground usually.
-         // Theta4 relative to positive X at O4. Vector O4->O2 is 180 deg.
-         // So Theta4 = PI - gamma.
-         const t4 = Math.PI - gamma;
+         
+         // Determine theta4.
+         // Standard: t4 = PI - gamma (Angle at O4 relative to O4->O2 vector being 180)
+         // O4 is at (r1, 0). O2 is at (0,0).
+         // Vector O4->O2 is angle 180 (PI).
+         // Gamma is internal angle of triangle.
+         // If assemblyMode is 1 (Open), B is typically y>0, so t4 in [0, PI].
+         // If assemblyMode is -1 (Crossed), B is typically y<0, so t4 in [PI, 2PI].
+         
+         let t4 = Math.PI - gamma;
+         if (assemblyMode === -1) {
+             t4 = Math.PI + gamma;
+         }
          
          // Calculate Point B
          const O4 = {x: r1, y: 0};
@@ -197,60 +205,15 @@ export const calculateLimits = (config: MechanismConfig): LimitAnalysis => {
          };
          
          // Calculate Point A
-         // A, B, O2 are collinear. A is dist r2 from O2.
-         // If Extended (dist = r2 + r3), A is between O2 and B.
-         // If Folded (dist = |r2 - r3|), position depends on r2 vs r3.
-         // Vector O2->B
-         const angleO2B = Math.atan2(B.y, B.x); // Angle of line
-         
-         // Determining A position along the line:
-         // If extended: A is in direction of B.
-         // If folded: 
-         //    If r2 > r3, B is closer to O2 than A. A is in same dir.
-         //    If r3 > r2, B is "behind" pivot relative to crank? No.
-         //    Actually, calculating A as intersection of Circle(0, r2) and Line(0, B) is ambiguous (2 points).
-         //    Correct Logic: 
-         //    Folded: Vector(O2->A) and Vector(A->B) are opposite.
-         //    Extended: Vector(O2->A) and Vector(A->B) are same direction.
-         
-         // For folded, we assume the mechanism hasn't flipped assembly mode in a weird way, 
-         // but geometric limit is simply when they overlap.
-         // If r3 > r2, and folded, A points towards B?
-         // Example: r2=2, r3=5. Folded len = 3. O2(0), B(3). A(2)? |A-B| = 1 != 5.
-         // Ah, |r2-r3|. If r3 > r2, then A and B are "opposed" relative to the pivot joint A?
-         // No. Joint A connects r2 and r3.
-         // Folded means angle between r2 and r3 is 180.
-         // So O2->A is direction X. A->B is direction -X.
-         // B = A - r3 * (A/|A|).
-         // O2->B = O2->A + A->B = r2*u - r3*u = (r2-r3)*u.
-         // Length is |r2-r3|. 
-         // If r2 < r3, O2->B is -(r3-r2)u. Opposite direction to A.
-         
-         // So if r2 < r3, A and B are on opposite sides of O2? No. 
-         // O2 is the origin.
-         // If A is at (2,0). B is at (2-5, 0) = (-3, 0).
-         // So Angle(B) = 180, Angle(A) = 0.
-         // But we found B based on triangle O2-O4-B. B is fixed in space by r1, r4 intersection.
-         // So A must be placed accordingly.
-         
-         // Let scale factor k such that A = k * B?
-         // If r2 < r3 (B is -3, A is 2), then A = B * (2 / -3). Negative scale.
-         // If r2 > r3 (B is 3, A is 5? No, r2=5, r3=2. B=3. A=5. A = B * 5/3).
-         // Extended: r2=2, r3=5. B=7. A=2. A = B * 2/7.
-         
-         // Summary:
-         // Extended (dist = r2+r3): A = B * (r2 / (r2+r3))
-         // Folded (dist = |r2-r3|):
-         //    If r2 >= r3: A = B * (r2 / (r2-r3))
-         //    If r2 < r3:  A = B * (-r2 / (r3-r2))
-         
+         // A, B, O2 are collinear.
          const isExtended = Math.abs(distO2B - (r2 + r3)) < 0.001;
          let scale = 0;
          
          if (isExtended) {
              scale = r2 / (r2 + r3);
          } else {
-             // Folded
+             // Folded: |r2 - r3|
+             // Direction O2->A vs O2->B depends on magnitude
              if (r2 >= r3) scale = r2 / (r2 - r3);
              else scale = -r2 / (r3 - r2);
          }
@@ -272,46 +235,59 @@ export const calculateLimits = (config: MechanismConfig): LimitAnalysis => {
     
     if (s1 && s2) {
         hasRockerLimits = true;
-        const ang1 = toDegrees(s1.theta4);
-        const ang2 = toDegrees(s2.theta4);
+        let ang1 = toDegrees(normalizeAngle(s1.theta4));
+        let ang2 = toDegrees(normalizeAngle(s2.theta4));
+        
+        // Handle wrapping for min/max logic so we get the correct arc
+        // e.g. 350 and 10. We want the range to be small.
+        // But for generic min/max display, just values are enough.
+        
         rockerMin = Math.min(ang1, ang2);
         rockerMax = Math.max(ang1, ang2);
+        
+        // For drawing, we want the state associated with the min/max numerical values if we were plotting,
+        // but for visualizer, we just need the two endpoints.
         stateMin = ang1 < ang2 ? s1 : s2;
         stateMax = ang1 < ang2 ? s2 : s1;
     }
  
     // --- Transmission Angle Limits ---
-    // Occur when Crank (r2) and Ground (r1) are collinear.
-    // 1. Extended Ground: theta2 = 0. A = (r2, 0). dist(A, O4) = |r1 - r2|
-    // 2. Folded Ground: theta2 = 180. A = (-r2, 0). dist(A, O4) = r1 + r2
+    // The transmission angle mu depends on distance d = dist(A, O4).
+    // Formula: cos(mu) = (r3^2 + r4^2 - d^2) / (2*r3*r4)
+    // As d increases, cos(mu) decreases, so mu increases.
+    // Thus: mu_min corresponds to d_min, mu_max corresponds to d_max.
     
-    const getTransAngle = (dA_O4: number) => {
-        // Law of cosines on triangle A-B-O4:
-        // dA_O4^2 = r3^2 + r4^2 - 2*r3*r4*cos(mu)
-        // cos(mu) = (r3^2 + r4^2 - dA_O4^2) / (2*r3*r4)
-        const val = (r3*r3 + r4*r4 - dA_O4*dA_O4) / (2*r3*r4);
-        // If triangle cannot be formed, it means mechanism breaks at this point or physically impossible.
-        // However, we clamp for robust display.
+    // Range of d is the intersection of:
+    // 1. Range reachable by Input Crank: [ |r1 - r2|, r1 + r2 ]
+    // 2. Range allowed by Coupler/Rocker: [ |r3 - r4|, r3 + r4 ]
+    
+    const inputMin = Math.abs(r1 - r2);
+    const inputMax = r1 + r2;
+    
+    const outputMin = Math.abs(r3 - r4);
+    const outputMax = r3 + r4;
+    
+    const dMin = Math.max(inputMin, outputMin);
+    const dMax = Math.min(inputMax, outputMax);
+    
+    let transmissionMin = 0;
+    let transmissionMax = 0;
+    
+    // Helper to calc mu from d
+    const calcMu = (d: number) => {
+        const val = (r3*r3 + r4*r4 - d*d) / (2*r3*r4);
         const clamped = Math.max(-1, Math.min(1, val));
         return toDegrees(Math.acos(clamped));
     };
     
-    const d1 = Math.abs(r1 - r2);
-    const d2 = r1 + r2;
-    
-    // Check if these distances are reachable by r3+r4
-    // Valid triangle condition for A-B-O4: |r3-r4| <= dA_O4 <= r3+r4
-    // If not valid, it implies the mechanism cannot rotate fully to theta2=0 or 180.
-    // In that case, the transmission limit is at the Rocker Limit (where mu = 0 or 180?)
-    // Actually, if the mechanism is a Grashof Crank-Rocker, r2 can rotate fully.
-    // If Non-Grashof, we might not reach theta2=0.
-    // Let's assume valid geometry for the extrema if they are reachable.
-    
-    const tA = getTransAngle(d1);
-    const tB = getTransAngle(d2);
-    
-    const transmissionMin = Math.min(tA, tB);
-    const transmissionMax = Math.max(tA, tB);
+    if (dMin <= dMax) {
+        transmissionMin = calcMu(dMin);
+        transmissionMax = calcMu(dMax);
+    } else {
+        // Impossible geometry
+        transmissionMin = NaN;
+        transmissionMax = NaN;
+    }
  
     return {
         hasRockerLimits,

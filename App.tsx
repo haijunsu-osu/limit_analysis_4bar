@@ -10,7 +10,7 @@ const INITIAL_CONFIG: MechanismConfig = {
   r2: 100, // Crank
   r3: 300, // Coupler
   r4: 200, // Rocker
-  assemblyMode: 1
+  assemblyMode: 1 // Default to Open
 };
 
 const App: React.FC = () => {
